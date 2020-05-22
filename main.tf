@@ -28,7 +28,7 @@ variable "server_port" {
 resource "aws_launch_configuration" "launch-confg-example" {
     image_id = "ami-07744b6c7178930b5" // Amazon Machine Image ID of an Ubuntu 18.04 AMI  in Canada Central
     instance_type = "t2.micro"    // EC2 Instance to run
-    security_group_ids = [aws_security_group.my-instance-sec-grp.id]
+    security_groups = [aws_security_group.my-instance-sec-grp.id]
     
     user_data = <<-EOF
                 #!/bin/bash
@@ -46,7 +46,10 @@ resource "aws_launch_configuration" "launch-confg-example" {
 
 resource "aws_autoscaling_group" "asg-example" {
   launch_configuration = aws_launch_configuration.launch-confg-example.name
-  vpc_zone_identifier = data.aws_subnet_ids.default.aws_subnet_ids
+  vpc_zone_identifier = data.aws_subnet_ids.default.ids
+  
+  target_group_arns = [aws_lb_target_group.asg-alb-trgt-grp.arn]
+  health_check_type = "ELB"
 
   min_size = 2
   max_size = 10
@@ -58,10 +61,83 @@ resource "aws_autoscaling_group" "asg-example" {
   }
 }
 
-resource "aws_lb" "name" {
-  
+// AWS Elastic Application Load Balancer
+resource "aws_lb" "my-asg-lb" {
+  name = "terraform-asg-example"
+  load_balancer_type = "application"
+  subnets = data.aws_subnet_ids.default.ids
+  security_groups = [aws_security_group.alb-sec-grp.id]
 }
 
+// ALB Listener
+resource "aws_lb_listener" "http" {
+  load_balancer_arn = aws_lb.my-asg-lb.arn
+  port = 80
+  protocol = "HTTP"
+
+  # By default, return a simple 404 page
+  default_action {
+      type = "fixed-response"
+
+      fixed_response {
+          content_type = "text/plain"
+          message_body = "404: page not found"
+          status_code = 404
+      }
+  }
+}
+
+resource "aws_security_group" "alb-sec-grp" {
+  name = "terraform-example-alb-sec-grp"
+
+  # Allow inbound HTTP requrests
+  ingress {
+      from_port = 80
+      to_port = 80
+      protocol = "tcp"
+      cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # Allow all outbound requests
+  egress {
+      from_port = 0
+      to_port = 0
+      protocol = "-1"
+      cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_lb_target_group" "asg-alb-trgt-grp" {
+  name = "terraform-asg-alb-trgt-grp"
+  port = var.server_port
+  protocol = "HTTP"
+  vpc_id = data.aws_vpc.default.id
+
+  health_check {
+      path = "/"
+      protocol = "HTTP"
+      matcher = "200"
+      interval = 15
+      timeout = 3
+      healthy_threshold = 2
+      unhealthy_threshold = 2
+  }
+}
+
+resource "aws_lb_listener_rule" "asg-lb-rule" {
+    listener_arn = aws_lb_listener.http.arn
+    priority = 100
+    condition {
+        field = "path-pattern"
+        values = ["*"]
+    }
+
+    action {
+        type = "forward"
+        target_group_arn = aws_lb_target_group.asg-alb-trgt-grp.arn
+    }
+  
+}
 
 
 data "aws_vpc" "default" {
@@ -69,7 +145,7 @@ data "aws_vpc" "default" {
 }
 
 data "aws_subnet_ids" "default" {
-  vpc_id = aws_vpc.default.id
+  vpc_id = data.aws_vpc.default.id
 }
 
 
@@ -86,8 +162,8 @@ resource "aws_security_group" "my-instance-sec-grp" {
   
 }
 
-output "public_ip" {
-  value = aws_instance.my-instance.public_ip
-  description = "The public IP address of the web server"
+output "alb_dns_name" {
+  value = aws_lb.my-asg-lb.dns_name
+  description = "The domain name of the load balancer"
 }
 
