@@ -50,4 +50,10 @@ resource "google_compute_network" "vpc_network" {
     auto_create_subnetworks = "true"
 }
 
+terraform {
+    backend "s3" {
+        key = "multi-cloud/terraform.tfstate"
+    }
+}
+
 
